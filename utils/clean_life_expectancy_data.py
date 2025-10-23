@@ -21,7 +21,7 @@ rename_map = {
     "Polio": "PolioCoveragePercentage",
     "Diphtheria": "DiphtheriaCoveragePercentage",
     "Incidents_HIV": "HivIncidentsPer1k",
-    "GDP_per_capita": "GdpPerCapitalUsd",
+    "GDP_per_capita": "GdpPerCapitaUsd",
     "Population_mln": "PopulationMillions",
     "Thinness_ten_nineteen_years": "Thinness10To19Percentage",
     "Thinness_five_nine_years": "Thinness5To9Percentage",
