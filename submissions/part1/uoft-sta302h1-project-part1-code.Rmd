@@ -1,0 +1,241 @@
+```{r CONSTANTS, warning=FALSE}
+# libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gt)
+library(broom)
+
+# constants
+META_BLUE <- "#0081FB"
+SPOTIFY_GREEN <- "#1DB954"
+AIRBNB_RED <- "#FF5A5F"
+```
+
+```{r summary-response, echo=TRUE, message=FALSE, warning=FALSE}
+
+# load in our life expectancy data set
+data <- read.csv("life-expectancy-data-cleaned.csv")
+
+# summarize our response variable (i.e., life expectancy)
+summary(data$LifeExpectancyYears)
+
+# histogram of response
+ggplot(data, aes(x = LifeExpectancyYears)) +
+  geom_histogram(binwidth = 2, fill = META_BLUE, color = "white", alpha = 0.8) +
+  labs(title = "Distribution of Life Expectancy",
+       x = "Life Expectancy (years)", y = "Count") +
+  theme_minimal()
+
+# boxplot of response
+ggplot(data, aes(y = LifeExpectancyYears)) +
+  geom_boxplot(fill = META_BLUE, alpha = 0.8) +
+  labs(title = "Boxplot of Life Expectancy",
+       y = "Life Expectancy (years)") +
+  theme_minimal()
+
+summary(data)
+```
+
+```{r 2.3, echo=TRUE, message=FALSE, warning=FALSE}
+
+numerical_summary <- data %>%
+  select(InfantDeathsPer1k,
+         AdultMortalityPer1k,	
+         AlcoholLitersPerCapita,	
+         HepatitisBCoveragePercentage,
+         GdpPerCapitaUsd,
+         PopulationMillions,
+         Thinness10To19Percentage,
+         AvgSchoolingYears) %>%
+  summarise(across(
+    everything(),
+    list(
+      Min = ~min(.x),
+      Q1 = ~quantile(.x, 0.25),
+      Median = ~median(.x),
+      Mean = ~mean(.x),
+      Q3 = ~quantile(.x, 0.75),
+      Max = ~max(.x)
+    )
+  )) %>%
+  pivot_longer(
+    everything(),
+    names_to = c("Predictor", ".value"),
+    names_sep = "_"
+  ) %>%
+  gt() %>%
+  fmt_number(columns = 2:7, decimals = 2) %>%
+  tab_header(title = "Numerical Summary of Preliminary Predictors") %>%
+  tab_options(table.font.size = px(13)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style= cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  ) %>%
+  tab_style(
+    style= cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = vars(Predictor))
+  )
+
+numerical_summary
+
+table(data$IsDeveloped) %>%
+  as.data.frame() %>%
+  setNames(c("DevelopmentStatus", "Count")) %>%
+  mutate(Proportion = Count / sum(Count)) %>%
+  gt() %>%
+  fmt_percent(columns = vars(Proportion), decimals = 1) %>%
+  tab_header(title = "Categorical Summary: Development Status") %>%
+  tab_options(
+    table.font.size = px(13),
+    heading.title.font.weight = "bold"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  )
+
+```
+
+
+```{r 2.4, echo=TRUE, message=FALSE, warning=FALSE}
+ggplot(data, aes(x = GdpPerCapitaUsd, y = LifeExpectancyYears, color = factor(IsDeveloped))) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(
+    values = c("0" = AIRBNB_RED, # developing
+               "1" = META_BLUE), # developed
+    labels = c("0" = "Developing",
+               "1" = "Developed")
+  ) +
+  labs(
+    title = "Life Expectancy vs GDP per Capita by Development Status",
+    x = "GDP per Capita",
+    y = "Life Expectancy (years)",
+    color = "Development Status"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r 4.1, echo=TRUE, message=FALSE, warning=FALSE}
+
+# fit the preliminary model with interaction
+model_prelim <- lm(
+  LifeExpectancyYears ~
+    InfantDeathsPer1k +
+    AdultMortalityPer1k +
+    AlcoholLitersPerCapita +
+    HepatitisBCoveragePercentage +
+    # log10(GdpPerCapitaUsd) * IsDeveloped +
+    GdpPerCapitaUsd * IsDeveloped +
+    PopulationMillions +
+    Thinness10To19Percentage +
+    AvgSchoolingYears,
+  data = data
+)
+
+# summarize our preliminary model
+summary(model_prelim)
+
+# model the coefficients table
+model_table <- tidy(model_prelim, conf.int = TRUE) %>%
+  gt() %>%
+  fmt_number(columns = 2:7, decimals = 3) %>%
+  fmt_scientific(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 2,
+    rows = abs(estimate) < 0.001
+  ) %>%
+  tab_header(title = "Preliminary Linear Regression Results") %>%
+  tab_options(table.font.size = px(13)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  )
+
+model_table
+```
+
+```{r}
+fitted_prelim <- fitted(model_prelim)
+residuals_prelim <- resid(model_prelim)
+
+# plot residuals vs. fitted initially
+plot(x = fitted_prelim, y = residuals_prelim,
+     main = "Residuals vs Fitted",
+     xlab = "Fitted", ylab = "Residuals")
+abline(h = 0, col = META_BLUE)
+
+# plot residuals vs. numerical predictors (e.g., infant/adult mortality, education, etc.)
+# par(mfrow = c(1, 2))
+with(data, {
+  plot(InfantDeathsPer1k, residuals_prelim, main = "Residuals vs Infant Deaths",
+       xlab = "Infant Deaths per 1k", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+  plot(AdultMortalityPer1k, residuals_prelim, main = "Residuals vs Adult Mortality",
+       xlab = "Adult Mortality per 1k", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+})
+
+with(data, {
+  plot(AlcoholLitersPerCapita, residuals_prelim, main = "Residuals vs Alcohol",
+       xlab = "Alcohol (liters per capita)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+  plot(HepatitisBCoveragePercentage, residuals_prelim, main = "Residuals vs HepB Coverage",
+       xlab = "Hepatitis B Coverage (%)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+})
+
+with(data, {
+  plot(GdpPerCapitaUsd, residuals_prelim, main = "Residuals vs GDP per Capita",
+       xlab = "GDP per Capita (USD)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+  plot(PopulationMillions, residuals_prelim, main = "Residuals vs Population",
+       xlab = "Population (millions)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+})
+
+with(data, {
+  plot(Thinness10To19Percentage, residuals_prelim, main = "Residuals vs Thinness",
+       xlab = "Adolescent Thinness (Ages 10-19) (%)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+  plot(AvgSchoolingYears, residuals_prelim, main = "Residuals vs Average Schooling",
+       xlab = "Average Schooling Years", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+})
+
+# plot residuals vs. categorical predictors (i.e., development status)
+par(mfrow = c(1, 1))
+boxplot(residuals_prelim ~ data$IsDeveloped,
+        main = "Residuals vs IsDeveloped",
+        xlab = "IsDeveloped (0 = NO, 1 = YES)", ylab = "Residuals")
+abline(h = 0, col = META_BLUE)
+
+# normality check
+qqnorm(residuals_prelim, main = "Normal QQ Plot of Residuals")
+qqline(residuals_prelim, col = META_BLUE)
+
+plot(x = data$LifeExpectancyYears, y = fitted_prelim,
+     main = "Response vs Fitted",
+     xlab = "Fitted Values",
+     ylab = "Life Expectancy Years")
+abline(a = 0, b = 1, lty = 2, col = META_BLUE)
+
+
+pairs(data[, c("InfantDeathsPer1k",
+               "AdultMortalityPer1k",
+               "AlcoholLitersPerCapita",
+               "HepatitisBCoveragePercentage",
+               "GdpPerCapitaUsd",
+               "PopulationMillions",
+               "Thinness10To19Percentage",
+               "AvgSchoolingYears")],
+      main = "Pairwise Scatterplots of Numerical Predictors"
+)
+```
