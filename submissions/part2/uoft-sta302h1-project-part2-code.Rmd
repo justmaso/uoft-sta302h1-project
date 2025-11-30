@@ -1,0 +1,1154 @@
+```{r CONSTANTS, warning=FALSE}
+# libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gt)
+library(broom)
+
+# constants
+META_BLUE <- "#0081FB"
+SPOTIFY_GREEN <- "#1DB954"
+AIRBNB_RED <- "#FF5A5F"
+```
+
+## 2.2 Statistical Summary
+
+```{r summary-response, echo=TRUE, message=FALSE, warning=FALSE}
+
+# load in our life expectancy data set
+data <- read.csv("life-expectancy-data-cleaned.csv")
+
+# summarize our response variable (i.e., life expectancy)
+summary(data$LifeExpectancyYears)
+
+# histogram of response
+ggplot(data, aes(x = LifeExpectancyYears)) +
+  geom_histogram(binwidth = 2, fill = META_BLUE, color = "white", alpha = 0.8) +
+  labs(title = "Distribution of Life Expectancy",
+       x = "Life Expectancy (years)", y = "Count") +
+  theme_minimal()
+
+# boxplot of response
+ggplot(data, aes(y = LifeExpectancyYears)) +
+  geom_boxplot(fill = META_BLUE, alpha = 0.8) +
+  labs(title = "Boxplot of Life Expectancy",
+       y = "Life Expectancy (years)") +
+  theme_minimal()
+
+summary(data)
+```
+
+
+```{r 2.3, echo=TRUE, message=FALSE, warning=FALSE}
+
+numerical_summary <- data %>%
+  dplyr::select(InfantDeathsPer1k,
+         AdultMortalityPer1k,	
+         AlcoholLitersPerCapita,	
+         HepatitisBCoveragePercentage,
+         GdpPerCapitaUsd,
+         PopulationMillions,
+         Thinness10To19Percentage,
+         AvgSchoolingYears) %>%
+  summarise(across(
+    everything(),
+    list(
+      Min = ~min(.x),
+      Q1 = ~quantile(.x, 0.25),
+      Median = ~median(.x),
+      Mean = ~mean(.x),
+      Q3 = ~quantile(.x, 0.75),
+      Max = ~max(.x)
+    )
+  )) %>%
+  pivot_longer(
+    everything(),
+    names_to = c("Predictor", ".value"),
+    names_sep = "_"
+  ) %>%
+  gt() %>%
+  fmt_number(columns = 2:7, decimals = 2) %>%
+  tab_header(title = "Numerical Summary of Preliminary Predictors") %>%
+  tab_options(table.font.size = px(13)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style= cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  ) %>%
+  tab_style(
+    style= cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = vars(Predictor))
+  )
+
+numerical_summary
+
+table(data$IsDeveloped) %>%
+  as.data.frame() %>%
+  setNames(c("DevelopmentStatus", "Count")) %>%
+  mutate(Proportion = Count / sum(Count)) %>%
+  gt() %>%
+  fmt_percent(columns = vars(Proportion), decimals = 1) %>%
+  tab_header(title = "Categorical Summary: Development Status") %>%
+  tab_options(
+    table.font.size = px(13),
+    heading.title.font.weight = "bold"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  )
+
+```
+
+
+```{r 2.4, echo=TRUE, message=FALSE, warning=FALSE}
+ggplot(data, aes(x = GdpPerCapitaUsd, y = LifeExpectancyYears, color = factor(IsDeveloped))) +
+  geom_point(alpha = 0.8) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(
+    values = c("0" = AIRBNB_RED, # developing
+               "1" = META_BLUE), # developed
+    labels = c("0" = "Developing",
+               "1" = "Developed")
+  ) +
+  labs(
+    title = "Life Expectancy vs GDP per Capita by Development Status",
+    x = "GDP per Capita",
+    y = "Life Expectancy (years)",
+    color = "Development Status"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r 4.1, echo=TRUE, message=FALSE, warning=FALSE}
+
+# fit the preliminary model with interaction
+model_prelim <- lm(
+  LifeExpectancyYears ~
+    InfantDeathsPer1k +
+    AdultMortalityPer1k +
+    AlcoholLitersPerCapita +
+    HepatitisBCoveragePercentage +
+    # log10(GdpPerCapitaUsd) * IsDeveloped +
+    GdpPerCapitaUsd * IsDeveloped +
+    PopulationMillions +
+    Thinness10To19Percentage +
+    AvgSchoolingYears,
+  data = data
+)
+
+# summarize our preliminary model
+summary(model_prelim)
+
+# model the coefficients table
+model_table <- tidy(model_prelim, conf.int = TRUE) %>%
+  gt() %>%
+  fmt_number(columns = 2:7, decimals = 3) %>%
+  fmt_scientific(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 2,
+    rows = abs(estimate) < 0.001
+  ) %>%
+  tab_header(title = "Preliminary Linear Regression Results") %>%
+  tab_options(table.font.size = px(13)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title(groups = "title")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  )
+
+model_table
+```
+
+```{r}
+fitted_prelim <- fitted(model_prelim)
+residuals_prelim <- resid(model_prelim)
+
+# plot residuals vs. fitted initially
+plot(x = fitted_prelim, y = residuals_prelim,
+     main = "Residuals vs Fitted",
+     xlab = "Fitted", ylab = "Residuals")
+abline(h = 0, col = META_BLUE)
+
+# plot residuals vs. numerical predictors (e.g., infant/adult mortality, education, etc.)
+# par(mfrow = c(1, 2))
+with(data, {
+  plot(InfantDeathsPer1k, residuals_prelim, main = "Residuals vs Infant Deaths",
+       xlab = "Infant Deaths per 1k", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+  plot(AdultMortalityPer1k, residuals_prelim, main = "Residuals vs Adult Mortality",
+       xlab = "Adult Mortality per 1k", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+})
+
+with(data, {
+  plot(AlcoholLitersPerCapita, residuals_prelim, main = "Residuals vs Alcohol",
+       xlab = "Alcohol (liters per capita)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+  plot(HepatitisBCoveragePercentage, residuals_prelim, main = "Residuals vs HepB Coverage",
+       xlab = "Hepatitis B Coverage (%)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+})
+
+with(data, {
+  plot(GdpPerCapitaUsd, residuals_prelim, main = "Residuals vs GDP per Capita",
+       xlab = "GDP per Capita (USD)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+  plot(PopulationMillions, residuals_prelim, main = "Residuals vs Population",
+       xlab = "Population (millions)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+})
+
+with(data, {
+  plot(Thinness10To19Percentage, residuals_prelim, main = "Residuals vs Thinness",
+       xlab = "Adolescent Thinness (Ages 10-19) (%)", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+  plot(AvgSchoolingYears, residuals_prelim, main = "Residuals vs Average Schooling",
+       xlab = "Average Schooling Years", ylab = "Residuals"); abline(h = 0, col = META_BLUE)
+})
+
+# plot residuals vs. categorical predictors (i.e., development status)
+par(mfrow = c(1, 1))
+boxplot(residuals_prelim ~ data$IsDeveloped,
+        main = "Residuals vs IsDeveloped",
+        xlab = "IsDeveloped (0 = NO, 1 = YES)", ylab = "Residuals")
+abline(h = 0, col = META_BLUE)
+
+# normality check
+qqnorm(residuals_prelim, main = "Normal QQ Plot of Residuals")
+qqline(residuals_prelim, col = META_BLUE)
+
+plot(x = data$LifeExpectancyYears, y = fitted_prelim,
+     main = "Response vs Fitted",
+     xlab = "Fitted Values",
+     ylab = "Life Expectancy Years")
+abline(a = 0, b = 1, lty = 2, col = META_BLUE)
+
+
+pairs(data[, c("InfantDeathsPer1k",
+               "AdultMortalityPer1k",
+               "AlcoholLitersPerCapita",
+               "HepatitisBCoveragePercentage",
+               "GdpPerCapitaUsd",
+               "PopulationMillions",
+               "Thinness10To19Percentage",
+               "AvgSchoolingYears")],
+      main = "Pairwise Scatterplots of Numerical Predictors"
+)
+```
+
+```{r}
+# APPLY TRANSFORMATIONS TO ADDRESS HETEROSCEDASTICITY
+
+# create transformed dataset
+data_transformed <- data %>%
+  mutate(
+    # log transformations for (r)-skewed variables
+    log_GDP = log(GdpPerCapitaUsd + 1),
+    log_Population = log(PopulationMillions + 1),
+    log_InfantDeaths = log(InfantDeathsPer1k + 1),
+    log_AdultMortality = log(AdultMortalityPer1k + 1),
+    
+    # don't transform these predictors
+    Alcohol = AlcoholLitersPerCapita,
+    HepB = HepatitisBCoveragePercentage,
+    Thinness = Thinness10To19Percentage,
+    Schooling = AvgSchoolingYears,
+    Developed = IsDeveloped
+  )
+
+# fit new model with transformed predictors
+model_transformed <- lm(
+  LifeExpectancyYears ~ 
+    log_InfantDeaths +
+    log_AdultMortality +
+    Alcohol +
+    HepB +
+    log_GDP * Developed +
+    log_Population +
+    Thinness +
+    Schooling,
+  data = data_transformed
+)
+
+summary(model_transformed)
+
+# compare heteroscedasticity before and after
+bp_test_original <- lmtest::bptest(model_prelim)
+bp_test_transformed <- lmtest::bptest(model_transformed)
+
+# use bp test and use p-values
+cat("\n=== HETEROSCEDASTICITY COMPARISON ===\n")
+cat("Original Model    - BP statistic:", round(bp_test_original$statistic, 2), 
+    ", p-value:", format(bp_test_original$p.value, scientific = TRUE), "\n")
+cat("Transformed Model - BP statistic:", round(bp_test_transformed$statistic, 2), 
+    ", p-value:", format(bp_test_transformed$p.value, scientific = TRUE), "\n")
+
+if(bp_test_transformed$p.value > bp_test_original$p.value) {
+  cat("+ Transformations IMPROVED heteroscedasticity!\n")
+  improvement <- ((bp_test_original$statistic - bp_test_transformed$statistic) / 
+                  bp_test_original$statistic) * 100
+  cat("  BP statistic reduced by", round(improvement, 1), "%\n")
+} else {
+  cat("⚠️  Transformations did not improve heteroscedasticity\n")
+}
+
+resid_trans <- resid(model_transformed)
+fitted_trans <- fitted(model_transformed)
+ggplot(data.frame(Fitted = fitted_trans, Residuals = resid_trans), 
+       aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.6, color = META_BLUE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = AIRBNB_RED, linewidth = 1) +
+  geom_smooth(se = FALSE, color = SPOTIFY_GREEN, linewidth = 1) +
+  labs(title = "Transformed Model: Residuals vs Fitted",
+       x = "Fitted Values", y = "Residuals") +
+  theme_minimal()
+
+std_resid_trans <- rstandard(model_transformed)
+ggplot(data.frame(Fitted = fitted_trans, SqrtStdResid = sqrt(abs(std_resid_trans))), 
+       aes(x = Fitted, y = SqrtStdResid)) +
+  geom_point(alpha = 0.6, color = META_BLUE) +
+  geom_smooth(se = FALSE, color = AIRBNB_RED, linewidth = 1) +
+  labs(title = "Transformed Model: Scale-Location Plot",
+       x = "Fitted Values", y = "sqrt(abs(Standardized Residuals))") +
+  theme_minimal()
+```
+
+```{r}
+# TRY TRANSFORMING THE RESPONSE VARIABLE SINCE TRANSFORMING PREDICTORS DIDN'T DO ANYTHING
+
+# box-cox to find optimal transformation
+library(MASS)
+
+# box-cox on the original model
+boxcox_result <- boxcox(model_prelim, lambda = seq(-2, 2, 0.1))
+lambda_optimal <- boxcox_result$x[which.max(boxcox_result$y)]
+
+cat("Optimal lambda from box-cox:", lambda_optimal, "\n")
+
+if(lambda_optimal > 0.9 & lambda_optimal < 1.1) {
+  cat("- No transformation needed (lambda ≈ 1)\n")
+} else if(lambda_optimal > -0.1 & lambda_optimal < 0.1) {
+  cat("- Log transformation suggested (lambda ≈ 0)\n")
+} else if(lambda_optimal > 0.4 & lambda_optimal < 0.6) {
+  cat("- Square root transformation suggested (lambda ≈ 0.5)\n")
+} else {
+  cat("- Power transformation lambda =", lambda_optimal, "\n")
+}
+
+# try sqrt(LifeExpectancy) (i.e., the response variable 😹)
+data_sqrt_response <- data %>%
+  mutate(sqrt_LifeExpectancy = sqrt(LifeExpectancyYears))
+
+model_sqrt_response <- lm(
+  sqrt_LifeExpectancy ~
+    InfantDeathsPer1k +
+    AdultMortalityPer1k +
+    AlcoholLitersPerCapita +
+    HepatitisBCoveragePercentage +
+    GdpPerCapitaUsd * IsDeveloped +
+    PopulationMillions +
+    Thinness10To19Percentage +
+    AvgSchoolingYears,
+  data = data_sqrt_response
+)
+
+# check for constant variance (i.e., heteroscedasticity) on sqrt(response)
+bp_test_sqrt <- lmtest::bptest(model_sqrt_response)
+
+cat("\n=== RESPONSE TRANSFORMATION COMPARISON ===\n")
+cat("Original Model (no transform) - BP p-value:", format(bp_test$p.value, scientific = TRUE), "\n")
+cat("Sqrt Response Model           - BP p-value:", format(bp_test_sqrt$p.value, scientific = TRUE), "\n")
+
+# Compare all three approaches
+cat("\n=== SUMMARY OF ALL APPROACHES ===\n")
+cat("1. Original predictors, original response - BP p-value:", format(bp_test$p.value, scientific = TRUE), "\n")
+cat("2. Log predictors, original response      - BP p-value:", format(bp_test_transformed$p.value, scientific = TRUE), "\n")
+cat("3. Original predictors, sqrt response     - BP p-value:", format(bp_test_sqrt$p.value, scientific = TRUE), "\n")
+```
+
+```{r}
+# TRY COMBINED: LOG PREDICTORS + SQRT RESPONSE
+
+data_combined <- data %>%
+  mutate(
+    # transformed response
+    sqrt_LifeExpectancy = sqrt(LifeExpectancyYears),
+    
+    # transformed predictors
+    log_GDP = log(GdpPerCapitaUsd + 1),
+    log_Population = log(PopulationMillions + 1),
+    log_InfantDeaths = log(InfantDeathsPer1k + 1),
+    log_AdultMortality = log(AdultMortalityPer1k + 1),
+    
+    Alcohol = AlcoholLitersPerCapita,
+    HepB = HepatitisBCoveragePercentage,
+    Thinness = Thinness10To19Percentage,
+    Schooling = AvgSchoolingYears,
+    Developed = IsDeveloped
+  )
+
+model_combined <- lm(
+  sqrt_LifeExpectancy ~ 
+    log_InfantDeaths +
+    log_AdultMortality +
+    Alcohol +
+    HepB +
+    log_GDP * Developed +
+    log_Population +
+    Thinness +
+    Schooling,
+  data = data_combined
+)
+
+bp_test_combined <- lmtest::bptest(model_combined)
+
+cat("\n=== FINAL COMPARISON ===\n")
+cat("1. Original model                                - BP p-value:", format(bp_test$p.value, scientific = TRUE), "\n")
+cat("2. Log predictors only                           - BP p-value:", format(bp_test_transformed$p.value, scientific = TRUE), "\n")
+cat("3. Sqrt response only                            - BP p-value:", format(bp_test_sqrt$p.value, scientific = TRUE), "\n")
+cat("4. Combined (log(predictors) & sqrt(response))   - BP p-value:", format(bp_test_combined$p.value, scientific = TRUE), "\n")
+
+# check which combination is the best using p-values (i.e., highest)
+bp_values <- c(bp_test$p.value, bp_test_transformed$p.value, 
+               bp_test_sqrt$p.value, bp_test_combined$p.value)
+best_approach <- which.max(bp_values)
+approach_names <- c("Original", "log(predictors)", "sqrt(response)", "Combined")
+
+cat("\nBest approach:", approach_names[best_approach], "\n")
+
+resid_comb <- resid(model_combined)
+fitted_comb <- fitted(model_combined)
+
+ggplot(data.frame(Fitted = fitted_comb, Residuals = resid_comb), 
+       aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.6, color = META_BLUE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = AIRBNB_RED, linewidth = 1) +
+  geom_smooth(se = FALSE, color = SPOTIFY_GREEN, linewidth = 1) +
+  labs(title = "Combined Transformation: Residuals vs Fitted",
+       x = "Fitted Values", y = "Residuals") +
+  theme_minimal()
+```
+
+```{r}
+# BACKWARD ELIMINATION USING ADJUSTED R-squared
+
+# start w/ preliminary model
+current_model <- model_prelim
+current_adj_r2 <- summary(current_model)$adj.r.squared
+
+cat("=== BACKWARD ELIMINATION ===\n")
+cat("Starting Adjusted R-squared:", round(current_adj_r2, 5), "\n")
+cat("Starting predictors:", length(coef(current_model)) - 1, "\n\n")
+
+# elim results
+elimination_results <- data.frame(
+  Step = 0,
+  Removed = "None (Full Model)",
+  Predictors = length(coef(current_model)) - 1,
+  Adj_R2 = current_adj_r2,
+  R2 = summary(current_model)$r.squared,
+  AIC = AIC(current_model),
+  BIC = BIC(current_model),
+  RMSE = sqrt(mean(resid(current_model)^2))
+)
+
+all_terms <- attr(terms(current_model), "term.labels")
+protected_terms <- c("GdpPerCapitaUsd", "IsDeveloped", "GdpPerCapitaUsd:IsDeveloped")
+removable_terms <- setdiff(all_terms, protected_terms)
+
+cat("Removable predictors:", paste(removable_terms, collapse = ", "), "\n")
+cat("Protected terms (interaction + components):", paste(protected_terms, collapse = ", "), "\n\n")
+
+# backward elim loop
+step_num <- 1
+improved <- TRUE
+
+while(improved & length(removable_terms) > 0) {
+  
+  cat("--- Step", step_num, "---\n")
+  
+  # attempt removal of each predictor that can be removed
+  test_results <- data.frame(
+    term = character(),
+    adj_r2 = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  # iterate across the removable terms
+  for(term in removable_terms) {
+    # fit model without this term
+    new_formula <- as.formula(paste(". ~ . -", term))
+    test_model <- update(current_model, new_formula)
+    test_adj_r2 <- summary(test_model)$adj.r.squared
+    
+    test_results <- rbind(test_results, 
+                          data.frame(term = term, adj_r2 = test_adj_r2))
+    
+    cat("  Without", term, ": Adjusted R-squared =", round(test_adj_r2, 5), "\n")
+  }
+  
+  # find best removal (highest adj R-squred)
+  best_idx <- which.max(test_results$adj_r2)
+  best_term <- test_results$term[best_idx]
+  best_adj_r2 <- test_results$adj_r2[best_idx]
+  
+  # check if any improvement made
+  if(best_adj_r2 > current_adj_r2) {
+    cat("\n+ Removing", best_term, "\n")
+    cat("  Adjusted R-squared improved:", round(current_adj_r2, 5), "-", round(best_adj_r2, 5), "\n\n")
+    
+    # update curr model
+    new_formula <- as.formula(paste(". ~ . -", best_term))
+    current_model <- update(current_model, new_formula)
+    current_adj_r2 <- best_adj_r2
+    
+    # remove from removable list
+    removable_terms <- setdiff(removable_terms, best_term)
+    
+    # update elim results
+    elimination_results <- rbind(elimination_results,
+                                data.frame(
+                                  Step = step_num,
+                                  Removed = best_term,
+                                  Predictors = length(coef(current_model)) - 1,
+                                  Adj_R2 = current_adj_r2,
+                                  R2 = summary(current_model)$r.squared,
+                                  AIC = AIC(current_model),
+                                  BIC = BIC(current_model),
+                                  RMSE = sqrt(mean(resid(current_model)^2))
+                                ))
+    
+    step_num <- step_num + 1
+    
+  } else {
+    cat("\n✗ No removal improves Adjusted R-squared. Stopping.\n")
+    improved <- FALSE
+  }
+}
+
+cat("\n=== BACKWARD ELIMINATION COMPLETE ===\n")
+cat("Final model has", length(coef(current_model)) - 1, "predictors\n")
+cat("Final Adjusted R-squared:", round(current_adj_r2, 5), "\n\n")
+
+print(elimination_results)
+
+# store as final model
+model_final <- current_model
+
+cat("\n=== FINAL MODEL FORMULA ===\n")
+print(formula(model_final))
+
+cat("\n=== FINAL MODEL SUMMARY ===\n")
+summary(model_final)
+```
+
+```{r}
+# FINAL MODEL DIAGNOSING
+# install.packages("car")
+library(car)
+cat("\n=== FINAL MODEL DIAGNOSTICS ===\n\n")
+
+resid_final <- resid(model_final)
+fitted_final <- fitted(model_final)
+std_resid_final <- rstandard(model_final)
+
+# residuals v. fitted
+p1 <- ggplot(data.frame(Fitted = fitted_final, Residuals = resid_final), 
+       aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.6, color = META_BLUE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = AIRBNB_RED, linewidth = 1) +
+  geom_smooth(se = FALSE, color = "#000000", linewidth = 1) +
+  labs(title = "Final Model: Residuals vs Fitted Values",
+       x = "Fitted Values", y = "Residuals") +
+  theme_minimal(base_size = 13)
+
+print(p1)
+
+# QQ plot
+p2 <- ggplot(data.frame(sample = resid_final), aes(sample = sample)) +
+  stat_qq(color = META_BLUE, alpha = 0.6, size = 2) +
+  stat_qq_line(color = AIRBNB_RED, linewidth = 1) +
+  labs(title = "Final Model: Normal Q-Q Plot",
+       x = "Theoretical Quantiles", y = "Sample Quantiles") +
+  theme_minimal(base_size = 13)
+
+print(p2)
+
+# scale-location plot
+p3 <- ggplot(data.frame(Fitted = fitted_final, 
+                        SqrtStdResid = sqrt(abs(std_resid_final))), 
+       aes(x = Fitted, y = SqrtStdResid)) +
+  geom_point(alpha = 0.6, color = META_BLUE) +
+  geom_smooth(se = FALSE, color = AIRBNB_RED, linewidth = 1) +
+  labs(title = "Final Model: Scale-Location Plot",
+       x = "Fitted Values", y = "sqrt(abs(Standardized Residuals))") +
+  theme_minimal(base_size = 13)
+
+print(p3)
+
+# cook's distance
+cooks_final <- cooks.distance(model_final)
+influential_threshold <- 4 / nrow(data)
+
+p4 <- ggplot(data.frame(Index = 1:length(cooks_final), CooksD = cooks_final), 
+       aes(x = Index, y = CooksD)) +
+  geom_point(alpha = 0.6, color = META_BLUE) +
+  geom_hline(yintercept = influential_threshold, linetype = "dashed", 
+             color = AIRBNB_RED, linewidth = 1) +
+  labs(title = "Final Model: Cook's Distance",
+       x = "Observation Index", y = "Cook's Distance") +
+  theme_minimal(base_size = 13)
+
+print(p4)
+
+# assumption tests
+cat("\n--- Assumption tests (for final model) ---\n")
+
+# normality
+if(nrow(data) < 5000) {
+  shapiro_final <- shapiro.test(resid_final)
+  cat("Shapiro-Wilk (Normality): W =", round(shapiro_final$statistic, 4), 
+      ", p-value =", format(shapiro_final$p.value, scientific = TRUE))
+  if(shapiro_final$p.value > 0.05) cat(" +\n") else cat(" (minor violation)\n")
+}
+
+# constant variance
+bp_final <- lmtest::bptest(model_final)
+cat("Breusch-Pagan (Homoscedasticity): BP =", round(bp_final$statistic, 2),
+    ", p-value =", format(bp_final$p.value, scientific = TRUE))
+if(bp_final$p.value > 0.05) cat(" +\n") else cat(" (violation persists)\n")
+
+# vif
+cat("\nVariance Inflation Factors:\n")
+vif_final <- vif(model_final)
+print(round(vif_final, 2))
+
+max_vif <- max(vif_final)
+if(max_vif > 10) {
+  cat("⚠️  High multicollinearity detected (VIF > 10)\n")
+} else if(max_vif > 5) {
+  cat("⚠️  Moderate multicollinearity (VIF > 5)\n")
+} else {
+  cat("+ No problematic multicollinearity (we're good)\n")
+}
+
+# influential points
+n_influential_final <- sum(cooks_final > influential_threshold)
+cat("\nInfluential points (Cook's D > 4/n):", n_influential_final, "\n")
+
+# check model perf
+cat("\n=== FINAL MODEL PERFORMANCE ===\n")
+final_summary <- summary(model_final)
+cat("R-squared:", round(final_summary$r.squared, 5), "\n")
+cat("Adjusted R-squared:", round(final_summary$adj.r.squared, 5), "\n")
+cat("RMSE:", round(sqrt(mean(resid_final^2)), 3), "years\n")
+cat("Residual std error:", round(final_summary$sigma, 3), "years\n")
+
+# compare to prelim model
+cat("\n=== COMPARISON: Preliminary vs Final ===\n")
+prelim_summary <- summary(model_prelim)
+cat("Preliminary: Adjusted R-squared =", round(prelim_summary$adj.r.squared, 5), 
+    ", Predictors =", length(coef(model_prelim)) - 1, "\n")
+cat("Final:       Adjusted R-squared =", round(final_summary$adj.r.squared, 5),
+    ", Predictors =", length(coef(model_final)) - 1, "\n")
+cat("- Removed 2 weak predictors with negligible loss in fit\n")
+```
+
+```{r}
+# FINAL MODEL: PLOTS FOR POSTER
+
+# coeff. table
+final_coef_table <- tidy(model_final, conf.int = TRUE) %>%
+  mutate(
+    significance = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01 ~ "**",
+      p.value < 0.05 ~ "*",
+      TRUE ~ ""
+    ),
+    term = dplyr::recode(term,
+      "(Intercept)" = "Intercept",
+      "InfantDeathsPer1k" = "Infant Mortality (per 1k)",
+      "AdultMortalityPer1k" = "Adult Mortality (per 1k)",
+      "AlcoholLitersPerCapita" = "Alcohol Consumption (L/capita)",
+      "HepatitisBCoveragePercentage" = "Hepatitis B Coverage (%)",
+      "GdpPerCapitaUsd" = "GDP per Capita (USD)",
+      "IsDeveloped" = "Developed Status",
+      "AvgSchoolingYears" = "Average Schooling (years)",
+      "GdpPerCapitaUsd:IsDeveloped" = "GDP × Developed"
+    )
+  ) %>%
+  dplyr::select(term, estimate, std.error, statistic, p.value, conf.low, conf.high, significance)
+
+# dsplay as gt table
+final_coef_table %>%
+  gt() %>%
+  cols_label(
+    term = "Predictor",
+    estimate = "β",
+    std.error = "SE",
+    statistic = "t",
+    p.value = "p-value",
+    conf.low = "95% CI Lower",
+    conf.high = "95% CI Upper",
+    significance = ""
+  ) %>%
+  fmt_number(columns = c(estimate, std.error, statistic, conf.low, conf.high), 
+             decimals = 4) %>%
+  fmt_scientific(columns = c(estimate, std.error, conf.low, conf.high), 
+                 decimals = 3, rows = abs(estimate) < 0.001) %>%
+  fmt_number(columns = p.value, decimals = 6) %>%
+  tab_header(
+    title = "Final Model: Effects on Life Expectancy",
+    subtitle = paste0("R-squared = ", round(final_summary$r.squared, 4),
+                     " | Adjusted R-squared = ", round(final_summary$adj.r.squared, 4),
+                     " | RMSE = ", round(sqrt(mean(resid_final^2)), 2), " years")
+  ) %>%
+  tab_footnote(footnote = "*** p<0.001, ** p<0.01, * p<0.05") %>%
+  tab_options(table.font.size = px(11)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title(groups = "title")
+  )
+
+# coeff. vals for text
+cat("\n=== KEY COEFFICIENTS FOR POSTER ===\n")
+coefs <- tidy(model_final, conf.int = TRUE)
+for(i in 1:nrow(coefs)) {
+  if(coefs$p.value[i] < 0.05 & coefs$term[i] != "(Intercept)") {
+    cat(sprintf("%s: β = %.4f, 95%% CI [%.4f, %.4f], p < %.3f\n",
+                coefs$term[i], coefs$estimate[i], 
+                coefs$conf.low[i], coefs$conf.high[i],
+                coefs$p.value[i]))
+  }
+}
+
+# coeff. plot
+coef_plot <- final_coef_table %>%
+  filter(term != "Intercept") %>%
+  mutate(
+    significant = ifelse(p.value < 0.05, "Significant (p < 0.05)", "Not Significant"),
+    term = factor(term, levels = term[order(estimate)])
+  ) %>%
+  ggplot(aes(x = estimate, y = term, color = significant)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray30", linewidth = 0.8) +
+  geom_point(size = 4) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.3, linewidth = 1.2) +
+  scale_color_manual(values = c("Significant (p < 0.05)" = META_BLUE, 
+                                 "Not Significant" = "gray60")) +
+  labs(title = "Final Model: Coefficient Estimates with 95% Confidence Intervals",
+       subtitle = paste0("Adjusted R-squared = ", round(final_summary$adj.r.squared, 4)),
+       x = "Effect on Life Expectancy (years)", 
+       y = NULL,
+       color = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    legend.position = "bottom",
+    panel.grid.major.y = element_line(color = "gray90")
+  )
+
+print(coef_plot)
+
+# predicted v. actual
+pred_actual_plot <- data.frame(
+  Actual = data$LifeExpectancyYears,
+  Predicted = fitted_final,
+  Developed = factor(data$IsDeveloped, labels = c("Developing", "Developed"))
+) %>%
+  ggplot(aes(x = Actual, y = Predicted, color = Developed)) +
+  geom_point(alpha = 0.5, size = 2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", 
+              color = "black", linewidth = 1) +
+  scale_color_manual(values = c("Developing" = AIRBNB_RED, "Developed" = META_BLUE)) +
+  labs(title = "Model Fit: Predicted vs Actual Life Expectancy",
+       subtitle = paste0("RMSE = ", round(sqrt(mean(resid_final^2)), 2), " years"),
+       x = "Actual Life Expectancy (years)",
+       y = "Predicted Life Expectancy (years)",
+       color = "Development Status") +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    legend.position = "bottom"
+  )
+
+print(pred_actual_plot)
+
+# model comparisons w/ our backward elim approach
+comparison_plot <- elimination_results %>%
+  ggplot(aes(x = Step, y = Adj_R2)) +
+  geom_line(color = META_BLUE, linewidth = 1.5) +
+  geom_point(size = 4, color = META_BLUE) +
+  geom_text(aes(label = Predictors), vjust = -1, size = 4) +
+  labs(title = "Backward Elimination: Model Selection Process",
+       subtitle = "Numbers indicate predictor count at each step",
+       x = "Elimination Step", 
+       y = "Adjusted R-squared") +
+  scale_y_continuous(limits = c(0.977, 0.9772)) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11)
+  )
+
+print(comparison_plot)
+
+# comparison
+cat("\n=== MODEL COMPARISON TABLE ===\n")
+elimination_results %>%
+  gt() %>%
+  fmt_number(columns = c(Adj_R2, R2, RMSE), decimals = 5) %>%
+  fmt_number(columns = c(AIC, BIC), decimals = 1) %>%
+  tab_header(title = "Backward Elimination: Model Selection Summary") %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "#E8F4F8"),
+    locations = cells_body(rows = Step == max(Step))
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title()
+  )
+```
+
+
+```{r}
+# KEY FINDINGS FOR INTERPRETATION
+cat("\n=== KEY FINDINGS FROM FINAL MODEL ===\n\n")
+
+# coefficients with interpretable names
+coefs <- tidy(model_final, conf.int = TRUE)
+
+# signif. predictors
+cat("SIGNIFICANT PREDICTORS (p < 0.05):\n\n")
+for(i in 1:nrow(coefs)) {
+  term <- coefs$term[i]
+  est <- coefs$estimate[i]
+  pval <- coefs$p.value[i]
+  ci_low <- coefs$conf.low[i]
+  ci_high <- coefs$conf.high[i]
+  
+  if(pval < 0.05 & term != "(Intercept)") {
+    sig_level <- if(pval < 0.001) "***" else if(pval < 0.01) "**" else "*"
+    
+    cat(sprintf("%s:\n", term))
+    cat(sprintf("  β = %.4f (95%% CI: [%.4f, %.4f])\n", est, ci_low, ci_high))
+    cat(sprintf("  p-value: %.6f %s\n", pval, sig_level))
+    cat(sprintf("  Interpretation: For each 1-unit increase, life expectancy changes by %.2f years\n\n", est))
+  }
+}
+
+# interpretation for interaction w/ GDP and development status
+cat("\n=== INTERACTION INTERPRETATION ===\n")
+gdp_main <- coefs$estimate[coefs$term == "GdpPerCapitaUsd"]
+developed_main <- coefs$estimate[coefs$term == "IsDeveloped"]
+interaction <- coefs$estimate[coefs$term == "GdpPerCapitaUsd:IsDeveloped"]
+
+cat(sprintf("GDP effect in DEVELOPING countries: β = %.6f per $1 GDP\n", gdp_main))
+cat(sprintf("GDP effect in DEVELOPED countries: β = %.6f per $1 GDP\n", gdp_main + interaction))
+cat(sprintf("  - That's %.6f + %.6f = %.6f\n\n", gdp_main, interaction, gdp_main + interaction))
+
+# scale constant to be per $1k for better interpretation
+cat("More interpretable (per $1000 GDP increase):\n")
+cat(sprintf("  Developing countries: %.3f years per $1000 GDP\n", gdp_main * 1000))
+cat(sprintf("  Developed countries: %.3f years per $1000 GDP\n", (gdp_main + interaction) * 1000))
+
+# rank signif. predictors by abs. effect size
+cat("\n=== PREDICTOR IMPORTANCE (by absolute coefficient) ===\n")
+coef_importance <- coefs %>%
+  filter(term != "(Intercept)") %>%
+  mutate(abs_effect = abs(estimate)) %>%
+  arrange(desc(abs_effect)) %>%
+  dplyr::select(term, estimate, abs_effect, p.value)
+
+print(coef_importance)
+```
+
+
+```{r}
+# FLOWCHART FOR METHODS OF ANALYSIS
+
+library(DiagrammeR)
+
+grViz("
+digraph flowchart {
+
+  graph [layout = dot, rankdir = TB]
+
+  # Main step style
+  node [
+    shape = rectangle,
+    style = filled,
+    color = '#1e3765',
+    fontcolor = white,
+    fontname = Garamond,
+    fontsize = 12,
+    width = 3
+  ]
+
+  # MAIN STEPS
+  data     [label = 'WHO Data (2000–2015)']
+  eda      [label = 'Exploratory Data Analysis\n& Assumption Checks']
+  prelim   [label = 'Preliminary Regression\nModel']
+  diag     [label = 'Diagnostics']
+  trans    [label = 'Transformations']
+  select   [label = 'Backward Elimination']
+  final    [label = 'Final Model']
+
+  # Explanation box style
+  node [
+    shape = rectangle,
+    style = filled,
+    color = '#1e3765',
+    fontcolor = white,
+    fontname = Garamond,
+    fontsize = 11,
+    width = 4.5
+  ]
+
+  # EXPLANATIONS
+  data_exp   [label = '193 countries\n2000–2015\nWHO + World Bank records\nReliable population indicators']
+  eda_exp    [label = 'Distributions, outliers\nCorrelations\nInitial assumption checks']
+  prelim_exp [label = 'Full MLR with 8 predictors\nGDP × Development interaction']
+  diag_exp   [label = 'Residuals vs fitted\nHeteroscedasticity tests\nNormality checks']
+  trans_exp  [label = 'Log transforms\nTried sqrt(response)\nAddressed skewness']
+  select_exp [label = 'AIC/BIC comparisons\nAdjusted R-squared changes\nRemoved weak predictors']
+  final_exp  [label = 'Improved assumptions\nKey determinants identified\nDifferences by development status']
+
+  # Align each step with its explanation horizontally
+  { rank = same; data    data_exp }
+  { rank = same; eda     eda_exp }
+  { rank = same; prelim  prelim_exp }
+  { rank = same; diag    diag_exp }
+  { rank = same; trans   trans_exp }
+  { rank = same; select  select_exp }
+  { rank = same; final   final_exp }
+
+  # Vertical flow for main steps
+  data -> eda -> prelim -> diag -> trans -> select -> final
+
+  # Horizontal connectors (no arrowheads)
+  data   -> data_exp   [dir=none]
+  eda    -> eda_exp    [dir=none]
+  prelim -> prelim_exp [dir=none]
+  diag   -> diag_exp   [dir=none]
+  trans  -> trans_exp  [dir=none]
+  select -> select_exp [dir=none]
+  final  -> final_exp  [dir=none]
+}
+")
+
+```
+
+
+```{r}
+# PLOTS FOR RESULTS SECTION
+
+library(dplyr)
+library(ggplot2)
+library(broom)
+
+# coeff. plot
+coef_data <- tidy(model_final, conf.int = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    significant = ifelse(p.value < 0.05, "Significant (p < 0.05)", "Not Significant"),
+    term_clean = case_when(
+      term == "InfantDeathsPer1k" ~ "Infant Mortality (per 1k)",
+      term == "AdultMortalityPer1k" ~ "Adult Mortality (per 1k)",
+      term == "AlcoholLitersPerCapita" ~ "Alcohol Consumption (L/capita)",
+      term == "HepatitisBCoveragePercentage" ~ "Hepatitis B Coverage (%)",
+      term == "GdpPerCapitaUsd" ~ "GDP per Capita (USD)",
+      term == "IsDeveloped" ~ "Developed Status",
+      term == "AvgSchoolingYears" ~ "Average Schooling (years)",
+      term == "GdpPerCapitaUsd:IsDeveloped" ~ "GDP × Developed (Interaction)",
+      TRUE ~ term
+    ),
+    term_clean = factor(term_clean, levels = term_clean[order(estimate)])
+  )
+
+coef_plot <- ggplot(coef_data, aes(x = estimate, y = term_clean, color = significant)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray30", linewidth = 0.8) +
+  geom_point(size = 4) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.3, linewidth = 1.2) +
+  scale_color_manual(values = c("Significant (p < 0.05)" = META_BLUE, 
+                                 "Not Significant" = "gray60")) +
+  labs(title = "Coefficient Estimates with 95% Confidence Intervals",
+       subtitle = paste0("Adjusted R-squared = ", round(summary(model_final)$adj.r.squared, 4)),
+       x = "Effect on Life Expectancy (years)", 
+       y = NULL,
+       color = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    legend.position = "bottom",
+    panel.grid.major.y = element_line(color = "gray90")
+  )
+
+print(coef_plot)
+
+
+# predicted v. actual
+pred_actual_plot <- data.frame(
+  Actual = data$LifeExpectancyYears,
+  Predicted = fitted(model_final),
+  Developed = factor(data$IsDeveloped, labels = c("Developing", "Developed"))
+) %>%
+  ggplot(aes(x = Actual, y = Predicted, color = Developed)) +
+  geom_point(alpha = 0.5, size = 2) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", 
+              color = "black", linewidth = 1) +
+  scale_color_manual(values = c("Developing" = AIRBNB_RED, "Developed" = META_BLUE)) +
+  labs(title = "Final Model Fit: Predicted vs Actual Life Expectancy",
+       subtitle = paste0("RMSE = ", round(sqrt(mean(resid(model_final)^2)), 2), " years"),
+       x = "Actual Life Expectancy (years)",
+       y = "Predicted Life Expectancy (years)",
+       color = "Development Status") +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11),
+    legend.position = "bottom"
+  )
+
+print(pred_actual_plot)
+
+
+# residuals v. fitted
+resid_fitted_plot <- data.frame(
+  Fitted = fitted(model_final),
+  Residuals = resid(model_final)
+) %>%
+  ggplot(aes(x = Fitted, y = Residuals)) +
+  geom_point(alpha = 0.6, color = META_BLUE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = AIRBNB_RED, linewidth = 1) +
+  geom_smooth(se = FALSE, color = "black", linewidth = 1, method = "loess") +
+  labs(title = "Final Model: Residuals vs Fitted Values",
+       subtitle = "The check for both linearity and homoscedasticity",
+       x = "Fitted Values", 
+       y = "Residuals") +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11)
+  )
+
+print(resid_fitted_plot)
+
+
+# QQ plot for normality on final
+qq_plot <- data.frame(sample = resid(model_final)) %>%
+  ggplot(aes(sample = sample)) +
+  stat_qq(color = META_BLUE, alpha = 0.6, size = 2) +
+  stat_qq_line(color = "black", linewidth = 1) +
+  labs(title = "Final Model: Normal Q-Q Plot",
+       subtitle = "The check for the normality of residuals",
+       x = "Theoretical Quantiles", 
+       y = "Sample Quantiles") +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 11)
+  )
+
+print(qq_plot)
+```
+
+
+
+```{r}
+# CONCLUSION: KEY FINDINGS TABLE TO REDUCE TEXT
+
+library(gt)
+library(dplyr)
+
+# create findings table
+key_findings_table <- tibble(
+  Factor = c(
+    "Infant Mortality",
+    "Adult Mortality",
+    "Average Schooling",
+    "GDP (Developing Countries)",
+    "GDP (Developed Countries)"
+  ),
+  Effect = c(
+    "−0.14 years",
+    "−0.05 years",
+    "+0.11 years",
+    "+0.007 years",
+    "+0.030 years"
+  ),
+  Per_Unit = c(
+    "per death/1,000 births",
+    "per death/1,000 adults",
+    "per additional year",
+    "per $1,000 increase",
+    "per $1,000 increase"
+  ),
+  Interpretation = c(
+    "Strongest negative effect",
+    "Significant mortality impact",
+    "Education benefits",
+    "Modest GDP effect",
+    "4× stronger than developing"
+  )
+) %>%
+  gt() %>%
+  tab_header(
+    title = "Key Findings: Effects on Life Expectancy"
+  ) %>%
+  cols_label(
+    Factor = "Predictor",
+    Effect = "Effect Size",
+    Per_Unit = "Unit",
+    Interpretation = "Note"
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(columns = everything())
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_title()
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "#FFE6E6"),
+    locations = cells_body(rows = c(1, 2))  # Highlight negative effects
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "#E6F4EA"),
+    locations = cells_body(rows = 3)  # Highlight positive effect
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "#E8F4F8"),
+    locations = cells_body(rows = c(4, 5))  # Highlight GDP effects
+  ) %>%
+  tab_options(
+    table.font.size = px(12)
+  ) %>%
+  tab_footnote(
+    footnote = "Developed countries show 4× larger GDP effect than developing countries",
+    locations = cells_body(columns = Effect, rows = 5)
+  )
+
+print(key_findings_table)
+```
+
+
